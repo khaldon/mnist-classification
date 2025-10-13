@@ -67,6 +67,10 @@ create_environment:
 data: requirements
 	$(PYTHON_INTERPRETER) mnist_classification/dataset.py
 
+## Make dataset
+.PHONY: train
+train: requirements
+	$(PYTHON_INTERPRETER) mnist_classification/modeling/train.py
 
 #################################################################################
 # Self Documenting Commands                                                     #
