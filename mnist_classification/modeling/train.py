@@ -1,5 +1,3 @@
-from typing import Any
-
 from joblib import dump, load
 from loguru import logger
 import numpy as np
@@ -8,6 +6,7 @@ from sklearn.linear_model import SGDClassifier
 from sklearn.metrics import precision_recall_curve
 from sklearn.model_selection import cross_val_predict, cross_val_score
 import typer
+from typing_extensions import Annotated
 
 from mnist_classification.config import (
     ARTIFACT_DIR,
@@ -82,13 +81,13 @@ app = typer.Typer()
 
 @app.command()
 def main(
-    target_digit: int = typer.Option(
-        5, "--digit", "-d", help="Digit to classify (0-9)"
-    ),
-    save_model: bool = typer.Option(
-        True, "--save-model", help="Save trained model to disk"
-    ),
-    cv_folds: int = typer.Option(3, "--cv", help="Number of cross-validation folds"),
+    target_digit: Annotated[
+        int, typer.Option("--digit", "-d", help="Digit to classify (0-9)")
+    ] = 5,
+    save_model: Annotated[bool, typer.Option(help="Save trained model to disk")] = True,
+    cv_folds: Annotated[
+        int, typer.Option("--cv", help="Number of cross-validation folds")
+    ] = 3,
 ):
     """Train a binary SGD classifier to detect a spesific MNIST digit"""
     logger.info("Statring model training....")
@@ -100,7 +99,6 @@ def main(
     pr_curve = compute_precision_recall_curve(
         model, X_train, y_train_binary, cv_folds=cv_folds
     )
-    # evaluate_model(sgd_model, x_test, y_test)
     if save_model:
         sgd_model_path = MODELS_DIR / f"sgd_digit_{target_digit}.joblib"
         pr_curve_path = ARTIFACT_DIR / f"pr_curve_{target_digit}.joblib"
@@ -110,6 +108,7 @@ def main(
         dump(sgd_model, sgd_model_path)
         dump(pr_curve, pr_curve_path)
         logger.info(f"Model saved to {sgd_model_path}")
+
     logger.info("Training pipline compeleted successfully")
 
 
