@@ -1,3 +1,7 @@
+from datetime import datetime, timezone
+import json
+from pathlib import Path
+
 from joblib import dump, load
 from loguru import logger
 import numpy as np
@@ -6,7 +10,7 @@ from sklearn.linear_model import SGDClassifier
 from sklearn.metrics import precision_recall_curve
 from sklearn.model_selection import cross_val_predict, cross_val_score
 import typer
-from typing_extensions import Annotated
+from typing_extensions import Annotated, Dict
 
 from mnist_classification.config import (
     ARTIFACT_DIR,
@@ -53,7 +57,7 @@ def compute_precision_recall_curve(
     y_train: np.ndarray,
     cv_folds: int = 3,
     replace: bool = False,
-):
+) -> Dict[str, np.ndarray]:
     """Compute precision/recall curve using cross validation decision scores"""
     ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
     pr_curve_path = ARTIFACT_DIR / "pr_curve_train.joblib"
@@ -76,6 +80,43 @@ def compute_precision_recall_curve(
     return pr_curve_data
 
 
+def evaluate_model_cv(
+    model: SGDClassifier,
+    X_train: np.ndarray,
+    y_true: np.ndarray,
+    cv_folds: int = 3,
+    scoring: str = "accuracy",
+) -> np.ndarray:
+    """Evaluate model using with cross-validation."""
+    logger.info(
+        f"Evaluating model with {cv_folds}-fold CV using '{scoring}' scoring...."
+    )
+    scores = cross_val_score(
+        model, X_train, y_true, cv=cv_folds, scoring=scoring, n_jobs=-1
+    )
+    logger.info(f"CV scores: {scores}")
+    return scores
+
+
+def save_evaluation_metrics(metrics: Dict | np.ndarray, output_path: Path) -> None:
+    """Save the output of metrics to JSON file"""
+    output_path.parents[0].mkdir(parents=True, exist_ok=True)
+
+    def default_serializer(obj):
+        if isinstance(obj, np.integer):
+            return int(obj)
+        elif isinstance(obj, np.floating):
+            return float(obj)
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
+
+    with open(output_path, "w") as f:
+        json.dump(metrics, f, indent=4, default=default_serializer)
+
+    logger.info(f"Metrics saved to {output_path}")
+
+
 app = typer.Typer()
 
 
@@ -94,20 +135,45 @@ def main(
     X_train, y_train, X_test, y_test = load_mnist_data()
     y_train_binary = create_binary_labels(y_train, target_digit)
     sgd_model = train_sgd_binary_classifier(X_train, y_train_binary, 5)
-    model = train_sgd_binary_classifier(X_train, y_train_binary)
 
-    pr_curve = compute_precision_recall_curve(
-        model, X_train, y_train_binary, cv_folds=cv_folds
+    cv_score = evaluate_model_cv(
+        sgd_model,
+        X_train,
+        y_train_binary,
+        cv_folds=cv_folds,
     )
+    pr_curve = compute_precision_recall_curve(
+        sgd_model,
+        X_train,
+        y_train_binary,
+        cv_folds=cv_folds,
+    )
+    # metrics = {
+    #     "timestamp": datetime.now(timezone.utc),
+    #     "target_digit": target_digit,
+    #     "model_type": "SGDClassifier",
+    #     "cv_folds": cv_folds,
+    #     "scoring": "accuracy",  # or make this configurable
+    #     "cv_scores": cv_score.tolist(),
+    #     "mean_cv_score": float(cv_score.mean()),
+    #     "std_cv_score": float(cv_score.std()),
+    #     "random_state": RAN_STAT,
+    #     "train_samples": len(X_train),
+    #     "positive_samples": int(y_train_binary.sum()),
+    # }
     if save_model:
         sgd_model_path = MODELS_DIR / f"sgd_digit_{target_digit}.joblib"
         pr_curve_path = ARTIFACT_DIR / f"pr_curve_{target_digit}.joblib"
+        metrics_path = ARTIFACT_DIR / f"metrics_digit_{target_digit}.json"
+
         MODELS_DIR.mkdir(parents=True, exist_ok=True)
         ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
 
         dump(sgd_model, sgd_model_path)
-        dump(pr_curve, pr_curve_path)
         logger.info(f"Model saved to {sgd_model_path}")
+        dump(pr_curve, pr_curve_path)
+        logger.info(f"Precision/recall scores are saved to {pr_curve_path}")
+        save_evaluation_metrics(cv_score, metrics_path)
 
     logger.info("Training pipline compeleted successfully")
 
