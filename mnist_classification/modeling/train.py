@@ -6,6 +6,7 @@ from joblib import dump, load
 from loguru import logger
 import numpy as np
 import pandas as pd
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import SGDClassifier
 from sklearn.metrics import precision_recall_curve
 from sklearn.model_selection import cross_val_predict, cross_val_score
@@ -15,9 +16,12 @@ from typing_extensions import Annotated, Dict
 from mnist_classification.config import (
     ARTIFACT_DIR,
     MODELS_DIR,
+    MODELS_NAME,
     PROCESSED_DATA_DIR,
     RAN_STAT,
 )
+
+DEFAULT_SCORING = "accuracy"
 
 
 def load_mnist_data():
@@ -47,22 +51,69 @@ def train_sgd_binary_classifier(
     logger.info("Training SGD binary classifier....")
     sgd_clf = SGDClassifier(random_state=random_state)
     sgd_clf.fit(X_train, y_binary)
-    logger.info(f"The {type(sgd_clf).__name__} training completed")
+    logger.info(f"The {MODELS_NAME[0]} training completed")
     return sgd_clf
+
+
+def train_rf_binary_classifier(
+    X_train: np.ndarray, y_binary: np.ndarray, random_state: int = RAN_STAT
+) -> RandomForestClassifier:
+    """Train Random Forest classifier for binary classification"""
+    logger.info("Training Random Forest binary classifier....")
+    rf_clf = RandomForestClassifier(random_state=random_state)
+    rf_clf.fit(X_train, y_binary)
+    logger.info(f"The {MODELS_NAME[1]} training completed")
+    return rf_clf
+
+
+def get_or_train_model(
+    model_type: str,
+    X_train: np.ndarray,
+    y_binary: np.ndarray,
+    random_state: int = RAN_STAT,
+    target_digit: int = 5,
+    force_retrain: bool = False,
+) -> SGDClassifier | RandomForestClassifier:
+    model_path = MODELS_DIR / f"{model_type}_digit_{target_digit}.joblib"
+    model_registry = {
+        MODELS_NAME[0]: lambda: train_sgd_binary_classifier(
+            X_train, y_binary, random_state
+        ),
+        MODELS_NAME[1]: lambda: train_rf_binary_classifier(
+            X_train, y_binary, random_state
+        ),
+    }
+
+    if not force_retrain and model_path.exists():
+        logger.info("Model found without retrain")
+        return load(model_path)
+
+    if model_type not in MODELS_NAME:
+        raise ValueError(f"Unsupported model_type {model_type}")
+
+    logger.info("Training new model (retrain forced or model not found)")
+    if model_type in model_registry:
+        model = model_registry[model_type]()
+        dump(model, model_path)
+        logger.info(f"Model saved to {model_path}")
+        return model
+    else:
+        raise ValueError("The model name is not found in model registry")
 
 
 def compute_precision_recall_curve(
     model: SGDClassifier,
     X_train: np.ndarray,
     y_train: np.ndarray,
+    target_digit: int,
     cv_folds: int = 3,
-    replace: bool = False,
+    force_replace: bool = False,
 ) -> Dict[str, np.ndarray]:
     """Compute precision/recall curve using cross validation decision scores"""
     ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
-    pr_curve_path = ARTIFACT_DIR / "pr_curve_train.joblib"
+    pr_curve_path = ARTIFACT_DIR / f"pr_curve_digit_{target_digit}.joblib"
     logger.info(f"Computing precision-recall curve with {cv_folds} folds cv....")
-    if not pr_curve_path.exists() or replace:
+    if not pr_curve_path.exists() or force_replace:
         y_scores = cross_val_predict(
             model, X_train, y_train, cv=cv_folds, method="decision_function", n_jobs=-1
         )
@@ -75,6 +126,7 @@ def compute_precision_recall_curve(
 
         dump(pr_curve_data, pr_curve_path)
     else:
+        logger.info("pr_curve found without retrain")
         pr_curve_data = load(pr_curve_path)
 
     return pr_curve_data
@@ -85,7 +137,7 @@ def evaluate_model_cv(
     X_train: np.ndarray,
     y_true: np.ndarray,
     cv_folds: int = 3,
-    scoring: str = "accuracy",
+    scoring: str = DEFAULT_SCORING,
 ) -> np.ndarray:
     """Evaluate model using with cross-validation."""
     logger.info(
@@ -99,7 +151,7 @@ def evaluate_model_cv(
 
 
 def save_evaluation_metrics(metrics: Dict | np.ndarray, output_path: Path) -> None:
-    """Save the output of metrics to JSON file"""
+    """Save evaluation metrics dictionary to a JSON file"""
     output_path.parents[0].mkdir(parents=True, exist_ok=True)
 
     def default_serializer(obj):
@@ -107,6 +159,8 @@ def save_evaluation_metrics(metrics: Dict | np.ndarray, output_path: Path) -> No
             return int(obj)
         elif isinstance(obj, np.floating):
             return float(obj)
+        elif isinstance(obj, datetime):
+            return str(obj)
         elif isinstance(obj, np.ndarray):
             return obj.tolist()
         raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
@@ -122,60 +176,63 @@ app = typer.Typer()
 
 @app.command()
 def main(
+    model_name: Annotated[
+        str,
+        typer.Option(
+            "--model-name", "-n", help="Choose the classifier model name options"
+        ),
+    ],
     target_digit: Annotated[
         int, typer.Option("--digit", "-d", help="Digit to classify (0-9)")
     ] = 5,
-    save_model: Annotated[bool, typer.Option(help="Save trained model to disk")] = True,
+    force_retrain: Annotated[
+        bool, typer.Option(help="Force retrain the model even the model exists")
+    ] = False,
     cv_folds: Annotated[
         int, typer.Option("--cv", help="Number of cross-validation folds")
     ] = 3,
 ):
-    """Train a binary SGD classifier to detect a spesific MNIST digit"""
-    logger.info("Statring model training....")
+    """Train a binary SGD classifier to detect a specific MNIST digit"""
+    logger.info("Starting model training....")
     X_train, y_train, X_test, y_test = load_mnist_data()
     y_train_binary = create_binary_labels(y_train, target_digit)
-    sgd_model = train_sgd_binary_classifier(X_train, y_train_binary, 5)
+
+    model = get_or_train_model(
+        model_name,
+        X_train,
+        y_train_binary,
+        RAN_STAT,
+        target_digit,
+        force_retrain=force_retrain,
+    )
 
     cv_score = evaluate_model_cv(
-        sgd_model,
+        model,
         X_train,
         y_train_binary,
         cv_folds=cv_folds,
     )
-    pr_curve = compute_precision_recall_curve(
-        sgd_model,
-        X_train,
-        y_train_binary,
-        cv_folds=cv_folds,
+    compute_precision_recall_curve(
+        model, X_train, y_train_binary, cv_folds=cv_folds, target_digit=target_digit
     )
-    # metrics = {
-    #     "timestamp": datetime.now(timezone.utc),
-    #     "target_digit": target_digit,
-    #     "model_type": "SGDClassifier",
-    #     "cv_folds": cv_folds,
-    #     "scoring": "accuracy",  # or make this configurable
-    #     "cv_scores": cv_score.tolist(),
-    #     "mean_cv_score": float(cv_score.mean()),
-    #     "std_cv_score": float(cv_score.std()),
-    #     "random_state": RAN_STAT,
-    #     "train_samples": len(X_train),
-    #     "positive_samples": int(y_train_binary.sum()),
-    # }
-    if save_model:
-        sgd_model_path = MODELS_DIR / f"sgd_digit_{target_digit}.joblib"
-        pr_curve_path = ARTIFACT_DIR / f"pr_curve_{target_digit}.joblib"
-        metrics_path = ARTIFACT_DIR / f"metrics_digit_{target_digit}.json"
+    metrics = {
+        "timestamp": datetime.now(timezone.utc),
+        "target_digit": target_digit,
+        "model_type": MODELS_NAME[0],
+        "cv_folds": cv_folds,
+        "scoring": DEFAULT_SCORING,  # or make this configurable
+        "cv_scores": cv_score.tolist(),
+        "mean_cv_score": float(cv_score.mean()),
+        "std_cv_score": float(cv_score.std()),
+        "random_state": RAN_STAT,
+        "train_samples": len(X_train),
+        "positive_samples": int(y_train_binary.sum()),
+    }
+    metrics_path = ARTIFACT_DIR / f"metrics_digit_{target_digit}.json"
 
-        MODELS_DIR.mkdir(parents=True, exist_ok=True)
-        ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
+    save_evaluation_metrics(metrics, metrics_path)
 
-        dump(sgd_model, sgd_model_path)
-        logger.info(f"Model saved to {sgd_model_path}")
-        dump(pr_curve, pr_curve_path)
-        logger.info(f"Precision/recall scores are saved to {pr_curve_path}")
-        save_evaluation_metrics(cv_score, metrics_path)
-
-    logger.info("Training pipline compeleted successfully")
+    logger.info("Training pipeline completed successfully")
 
 
 if __name__ == "__main__":
