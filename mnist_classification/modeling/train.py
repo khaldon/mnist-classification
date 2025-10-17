@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from enum import Enum
 import json
 from pathlib import Path
 
@@ -16,10 +17,15 @@ from typing_extensions import Annotated, Dict
 from mnist_classification.config import (
     ARTIFACT_DIR,
     MODELS_DIR,
-    MODELS_NAME,
     PROCESSED_DATA_DIR,
     RAN_STAT,
 )
+
+
+class ModelName(Enum):
+    sgd = "SGDClassifier"
+    rf = "RandomForestClassifier"
+
 
 DEFAULT_SCORING = "accuracy"
 
@@ -51,7 +57,7 @@ def train_sgd_binary_classifier(
     logger.info("Training SGD binary classifier....")
     sgd_clf = SGDClassifier(random_state=random_state)
     sgd_clf.fit(X_train, y_binary)
-    logger.info(f"The {MODELS_NAME[0]} training completed")
+    logger.info(f"The {ModelName.sgd} training completed")
     return sgd_clf
 
 
@@ -62,7 +68,7 @@ def train_rf_binary_classifier(
     logger.info("Training Random Forest binary classifier....")
     rf_clf = RandomForestClassifier(random_state=random_state)
     rf_clf.fit(X_train, y_binary)
-    logger.info(f"The {MODELS_NAME[1]} training completed")
+    logger.info(f"The {ModelName.rf} training completed")
     return rf_clf
 
 
@@ -76,10 +82,10 @@ def get_or_train_model(
 ) -> SGDClassifier | RandomForestClassifier:
     model_path = MODELS_DIR / f"{model_type}_digit_{target_digit}.joblib"
     model_registry = {
-        MODELS_NAME[0]: lambda: train_sgd_binary_classifier(
+        ModelName.sgd: lambda: train_sgd_binary_classifier(
             X_train, y_binary, random_state
         ),
-        MODELS_NAME[1]: lambda: train_rf_binary_classifier(
+        ModelName.rf: lambda: train_rf_binary_classifier(
             X_train, y_binary, random_state
         ),
     }
@@ -88,7 +94,7 @@ def get_or_train_model(
         logger.info("Model found without retrain")
         return load(model_path)
 
-    if model_type not in MODELS_NAME:
+    if model_type not in ModelName:
         raise ValueError(f"Unsupported model_type {model_type}")
 
     logger.info("Training new model (retrain forced or model not found)")
@@ -102,7 +108,7 @@ def get_or_train_model(
 
 
 def compute_precision_recall_curve(
-    model: SGDClassifier,
+    model: SGDClassifier | RandomForestClassifier,
     X_train: np.ndarray,
     y_train: np.ndarray,
     target_digit: int,
@@ -110,13 +116,31 @@ def compute_precision_recall_curve(
     force_replace: bool = False,
 ) -> Dict[str, np.ndarray]:
     """Compute precision/recall curve using cross validation decision scores"""
+
     ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
-    pr_curve_path = ARTIFACT_DIR / f"pr_curve_digit_{target_digit}.joblib"
+    pr_curve_path = (
+        ARTIFACT_DIR / f"{type(model).__name__}_pr_curve_digit_{target_digit}.joblib"
+    )
     logger.info(f"Computing precision-recall curve with {cv_folds} folds cv....")
     if not pr_curve_path.exists() or force_replace:
+        if isinstance(model, RandomForestClassifier):
+            method = "predict_proba"
+        else:
+            method = "decision_function"
         y_scores = cross_val_predict(
-            model, X_train, y_train, cv=cv_folds, method="decision_function", n_jobs=-1
+            model,
+            X_train,
+            y_train,
+            cv=cv_folds,
+            method=method,
+            n_jobs=-1,
         )
+        if method == "predict_proba":
+            if y_scores.ndim == 2 and y_scores.shape[1] == 2:
+                y_scores = y_scores[:, 1]
+            else:
+                raise ValueError("Unexpected output shape from predict_proba ")
+
         precisions, recalls, thresholds = precision_recall_curve(y_train, y_scores)
         pr_curve_data = {
             "precisions": precisions,
@@ -133,7 +157,7 @@ def compute_precision_recall_curve(
 
 
 def evaluate_model_cv(
-    model: SGDClassifier,
+    model: SGDClassifier | RandomForestClassifier,
     X_train: np.ndarray,
     y_true: np.ndarray,
     cv_folds: int = 3,
@@ -157,6 +181,7 @@ def save_evaluation_metrics(metrics: Dict | np.ndarray, output_path: Path) -> No
     def default_serializer(obj):
         if isinstance(obj, np.integer):
             return int(obj)
+
         elif isinstance(obj, np.floating):
             return float(obj)
         elif isinstance(obj, datetime):
@@ -179,7 +204,10 @@ def main(
     model_name: Annotated[
         str,
         typer.Option(
-            "--model-name", "-n", help="Choose the classifier model name options"
+            "--model-name",
+            "-m",
+            case_sensitive=False,
+            help="Choose the classifier model name options",
         ),
     ],
     target_digit: Annotated[

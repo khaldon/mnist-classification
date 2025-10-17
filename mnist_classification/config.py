@@ -2,6 +2,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from loguru import logger
+from sklearn.ensemble import RandomForestClassifier
 
 # Load environment variables from .env file if it exists
 load_dotenv()
@@ -22,7 +23,7 @@ REPORTS_DIR = PROJ_ROOT / "reports"
 FIGURES_DIR = REPORTS_DIR / "figures"
 ARTIFACT_DIR = REPORTS_DIR / "artifacts"
 
-MODELS_NAME = ("sgd_classifier", "random_forest")
+MODELS_NAME = ("sgd_classifier", type(RandomForestClassifier()).__name__)
 
 RAN_STAT = 42
 
