@@ -30,6 +30,28 @@ class ModelName(Enum):
 DEFAULT_SCORING = "accuracy"
 
 
+def handle_saved_file_name(
+    step_name: str,
+    model_name: str,
+    target_digit: int,
+    digit: bool = True,
+) -> str:
+    if digit:
+        return f"{step_name}_{model_name}_digit_{target_digit}"
+    else:
+        return f"{step_name}_{model_name}_{target_digit}"
+
+
+def get_model_key(model) -> str:
+    name = type(model).__name__
+    if name == ModelName.rf.value:
+        return ModelName.rf.value
+    elif name == ModelName.sgd.value:
+        return ModelName.sgd.value
+    else:
+        raise ValueError(f"Unkown model type: {name}")
+
+
 def load_mnist_data():
     """Load mnist train/test splits"""
     logger.info("Loading data from parquet files")
@@ -73,14 +95,17 @@ def train_rf_binary_classifier(
 
 
 def get_or_train_model(
-    model_type: str,
+    model_type: ModelName,
     X_train: np.ndarray,
     y_binary: np.ndarray,
     random_state: int = RAN_STAT,
     target_digit: int = 5,
     force_retrain: bool = False,
 ) -> SGDClassifier | RandomForestClassifier:
-    model_path = MODELS_DIR / f"{model_type}_digit_{target_digit}.joblib"
+    model_path = (
+        handle_saved_file_name("model", str(model_type.value), target_digit) + ".joblib"
+    )
+    model_path = MODELS_DIR / model_path
     model_registry = {
         ModelName.sgd: lambda: train_sgd_binary_classifier(
             X_train, y_binary, random_state
@@ -116,11 +141,14 @@ def compute_precision_recall_curve(
     force_replace: bool = False,
 ) -> Dict[str, np.ndarray]:
     """Compute precision/recall curve using cross validation decision scores"""
+    model_key = get_model_key(model)
 
     ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
+
     pr_curve_path = (
-        ARTIFACT_DIR / f"{type(model).__name__}_pr_curve_digit_{target_digit}.joblib"
+        handle_saved_file_name("pr_curve", model_key, target_digit) + ".joblib"
     )
+    pr_curve_path = ARTIFACT_DIR / pr_curve_path
     logger.info(f"Computing precision-recall curve with {cv_folds} folds cv....")
     if not pr_curve_path.exists() or force_replace:
         if isinstance(model, RandomForestClassifier):
@@ -201,13 +229,13 @@ app = typer.Typer()
 
 @app.command()
 def main(
-    model_name: Annotated[
-        str,
+    model: Annotated[
+        ModelName,
         typer.Option(
             "--model-name",
             "-m",
             case_sensitive=False,
-            help="Choose the classifier model name options",
+            help="Choose the classifier model",
         ),
     ],
     target_digit: Annotated[
@@ -225,8 +253,8 @@ def main(
     X_train, y_train, X_test, y_test = load_mnist_data()
     y_train_binary = create_binary_labels(y_train, target_digit)
 
-    model = get_or_train_model(
-        model_name,
+    model_obj = get_or_train_model(
+        model,
         X_train,
         y_train_binary,
         RAN_STAT,
@@ -235,18 +263,18 @@ def main(
     )
 
     cv_score = evaluate_model_cv(
-        model,
+        model_obj,
         X_train,
         y_train_binary,
         cv_folds=cv_folds,
     )
     compute_precision_recall_curve(
-        model, X_train, y_train_binary, cv_folds=cv_folds, target_digit=target_digit
+        model_obj, X_train, y_train_binary, cv_folds=cv_folds, target_digit=target_digit
     )
     metrics = {
         "timestamp": datetime.now(timezone.utc),
         "target_digit": target_digit,
-        "model_type": MODELS_NAME[0],
+        "model_type": model.value,
         "cv_folds": cv_folds,
         "scoring": DEFAULT_SCORING,  # or make this configurable
         "cv_scores": cv_score.tolist(),
@@ -256,7 +284,10 @@ def main(
         "train_samples": len(X_train),
         "positive_samples": int(y_train_binary.sum()),
     }
-    metrics_path = ARTIFACT_DIR / f"metrics_digit_{target_digit}.json"
+    metrics_path = (
+        handle_saved_file_name("metrics", str(model.value), target_digit) + ".json"
+    )
+    metrics_path = ARTIFACT_DIR / metrics_path
 
     save_evaluation_metrics(metrics, metrics_path)
 
