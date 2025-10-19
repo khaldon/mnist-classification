@@ -38,9 +38,9 @@ def handle_saved_file_name(
 ) -> str:
     """Generate name of the file to be consistant and in order"""
     if digit:
-        return f"{step_name}_{model_name}_digit_{target_digit}"
+        return f"{step_name.lower()}_{model_name.lower()}_digit_{target_digit}"
     else:
-        return f"{step_name}_{model_name}_{target_digit}"
+        return f"{step_name.lower()}_{model_name.lower()}_{target_digit}"
 
 
 def get_model_key(model) -> str:

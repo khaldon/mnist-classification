@@ -1,0 +1,17 @@
+{
+    "timestamp": "2025-10-19 22:02:41.364657+00:00",
+    "target_digit": 5,
+    "model_type": "SGDClassifier",
+    "cv_folds": 3,
+    "scoring": "accuracy",
+    "cv_scores": [
+        0.9537714285714286,
+        0.9479428571428572,
+        0.948
+    ],
+    "mean_cv_score": 0.9499047619047619,
+    "std_cv_score": 0.002734245741194946,
+    "random_state": 42,
+    "train_samples": 52500,
+    "positive_samples": 4688
+}
