@@ -36,6 +36,7 @@ def handle_saved_file_name(
     target_digit: int,
     digit: bool = True,
 ) -> str:
+    """Generate name of the file to be consistant and in order"""
     if digit:
         return f"{step_name}_{model_name}_digit_{target_digit}"
     else:
@@ -43,6 +44,7 @@ def handle_saved_file_name(
 
 
 def get_model_key(model) -> str:
+    """Get the model value from ModelName"""
     name = type(model).__name__
     if name == ModelName.rf.value:
         return ModelName.rf.value
@@ -102,6 +104,7 @@ def get_or_train_model(
     target_digit: int = 5,
     force_retrain: bool = False,
 ) -> SGDClassifier | RandomForestClassifier:
+    """Get the saved model file or retrain model"""
     model_path = (
         handle_saved_file_name("model", str(model_type.value), target_digit) + ".joblib"
     )
